@@ -42,6 +42,13 @@ const openHighWinRateHands = [
   { hand: 'KQo', rate: 56.6 },
 ];
 const pocketPairWinRates = [
+//   { hand: 'AA', rate: 85.2 },
+//   { hand: 'KK', rate: 82.1 },
+//   { hand: 'QQ', rate: 79.8 },
+//   { hand: 'JJ', rate: 77.6 },
+//   { hand: 'TT', rate: 75.2 },
+//   { hand: '99', rate: 72.9 },
+//   { hand: '88', rate: 70.7 },
   { hand: '77', rate: 67.9 },
   { hand: '66', rate: 65.2 },
   { hand: '55', rate: 62.5 },
@@ -49,6 +56,12 @@ const pocketPairWinRates = [
   { hand: '33', rate: 57.5 },
   { hand: '22', rate: 55.6 },
 ];
+
+const adjustOpenRate = (baseRate: number, playerCount: number) => {
+  if (playerCount < 2) return null;
+  const adjusted = Math.pow(baseRate / 100, playerCount - 1) * 100;
+  return Number(adjusted.toFixed(1));
+};
 
 const buildDeck = (used: Card[]) => {
   const deck: Card[] = [];
@@ -222,10 +235,11 @@ const scoreBestHand = (cards: Card[]) => {
 
 const sampleRate = 2000;
 
-const calculateResult = (hero: Card[], board: Card[]): Result => {
+const calculateResult = (hero: Card[], board: Card[], playerCount: number): Result => {
   const used = [...hero, ...board];
   const deck = buildDeck(used);
   const boardCount = board.length;
+  const opponentCount = Math.max(1, playerCount - 1);
   const result: Result = {
     wins: 0,
     ties: 0,
@@ -264,7 +278,21 @@ const calculateResult = (hero: Card[], board: Card[]): Result => {
     return scoreBestHand([...heroCards, ...boardCards]);
   };
 
-  if (boardCount === 5) {
+  const drawOpponents = (remainingDeck: Card[]) => {
+    const opponents: Card[][] = [];
+    const deckCopy = [...remainingDeck];
+    for (let n = 0; n < opponentCount; n += 1) {
+      const hand: Card[] = [];
+      for (let k = 0; k < 2; k += 1) {
+        const index = Math.floor(Math.random() * deckCopy.length);
+        hand.push(deckCopy.splice(index, 1)[0]);
+      }
+      opponents.push(hand);
+    }
+    return opponents;
+  };
+
+  if (boardCount === 5 && opponentCount === 1) {
     const heroCategory = getHandCategory([...hero, ...board]);
     for (let i = 0; i < deck.length - 1; i += 1) {
       for (let j = i + 1; j < deck.length; j += 1) {
@@ -287,18 +315,26 @@ const calculateResult = (hero: Card[], board: Card[]): Result => {
         const index = Math.floor(Math.random() * remainingDeck.length);
         futureBoard.push(remainingDeck.splice(index, 1)[0]);
       }
-      const opponent: Card[] = [];
-      for (let k = 0; k < 2; k += 1) {
-        const index = Math.floor(Math.random() * remainingDeck.length);
-        opponent.push(remainingDeck.splice(index, 1)[0]);
-      }
+      const opponents = drawOpponents(remainingDeck);
+      const heroFullBoard = [...hero, ...board, ...futureBoard];
       const heroScore = evaluateBoard(hero, [...board, ...futureBoard]);
-      const oppScore = evaluateBoard(opponent, [...board, ...futureBoard]);
-      const heroCategory = getHandCategory([...hero, ...board, ...futureBoard]);
+      const heroCategory = getHandCategory(heroFullBoard);
+      let oppBetter = false;
+      let oppTie = false;
+      for (const opponent of opponents) {
+        const oppScore = evaluateBoard(opponent, [...board, ...futureBoard]);
+        if (oppScore > heroScore) {
+          oppBetter = true;
+          break;
+        }
+        if (oppScore === heroScore) {
+          oppTie = true;
+        }
+      }
       result.categoryCounts[heroCategory] += 1;
-      if (heroScore > oppScore) result.wins += 1;
-      else if (heroScore < oppScore) result.losses += 1;
-      else result.ties += 1;
+      if (oppBetter) result.losses += 1;
+      else if (oppTie) result.ties += 1;
+      else result.wins += 1;
       result.total += 1;
     }
   }
@@ -327,6 +363,7 @@ const App = () => {
   const [boardInput, setBoardInput] = useState<CardInput[]>(
     Array.from({ length: 5 }, () => ({ rank: '', suit: '' }))
   );
+  const [playerCount, setPlayerCount] = useState(4);
 
   const heroCards = heroInput.map((card) => buildCard(card.rank, card.suit));
   const boardCards = boardInput.map((card) => buildCard(card.rank, card.suit));
@@ -335,12 +372,13 @@ const App = () => {
   const hasPartialBoard = boardInput.some((card) => (card.rank && !card.suit) || (!card.rank && card.suit));
   const usedCards = [...heroCards.filter(Boolean) as Card[], ...boardCards.filter(Boolean) as Card[]];
   const hasDuplicates = usedCards.length !== new Set(usedCards.map((card) => card.code)).size;
-  const inputValid = heroValid && boardValid && !hasDuplicates;
+  const validPlayerCount = Number.isInteger(playerCount) && playerCount >= 2 && playerCount <= 9;
+  const inputValid = heroValid && boardValid && !hasDuplicates && validPlayerCount;
 
   const result = useMemo(() => {
     if (!inputValid) return null;
-    return calculateResult(heroCards as Card[], boardCards.filter(Boolean) as Card[]);
-  }, [heroInput, boardInput]);
+    return calculateResult(heroCards as Card[], boardCards.filter(Boolean) as Card[], playerCount);
+  }, [heroInput, boardInput, playerCount]);
 
   const strategy = result
     ? result.winRate >= 65
@@ -368,15 +406,27 @@ const App = () => {
       { rank: 'K', suit: 'd' },
     ]);
     setBoardInput(Array.from({ length: 5 }, () => ({ rank: '', suit: '' })));
+    setPlayerCount(4);
   };
 
-  const invalidMessage = hasDuplicates
+  const invalidMessage = playerCount < 2
+    ? '请先输入 2-9 人的牌桌人数。'
+    : hasDuplicates
     ? '检测到重复牌，请检查输入。'
     : hasPartialBoard
     ? '公共牌请选择完整的花色与牌面，或保留为空。'
     : !heroValid
     ? '请先选择两张手牌。'
     : '';
+
+  const combinedHands = (() => {
+    const combined = [...openHighWinRateHands, ...pocketPairWinRates];
+    const map = new Map<string, { hand: string; rate: number }>();
+    for (const item of combined) {
+      if (!map.has(item.hand)) map.set(item.hand, item);
+    }
+    return Array.from(map.values());
+  })();
 
   return (
     <div className="app-shell">
@@ -386,19 +436,29 @@ const App = () => {
       </header>
 
       <div className="main-layout">
+        <section className="player-count-panel">
+          <input
+            className="player-count-input"
+            type="number"
+            min={2}
+            max={9}
+            value={playerCount || ''}
+            onChange={(e) => setPlayerCount(Number(e.target.value))}
+            placeholder="桌上人数 (2-9)"
+          />
+        </section>
+
         <section className="high-hands-panel">
-          <h2>高胜率</h2>
+          <h2>参考牌型</h2>
           <ul>
-            {openHighWinRateHands.map(({ hand, rate }) => (
-              <li key={hand}>
-                {hand}: {rate}%
-              </li>
-            ))}
-            {pocketPairWinRates.map(({ hand, rate }) => (
-              <li key={hand}>
-                {hand}: {rate}%
-              </li>
-            ))}
+            {combinedHands.map(({ hand, rate }) => {
+              const adjusted = adjustOpenRate(rate, playerCount);
+              return (
+                <li key={hand}>
+                  {hand}: {adjusted !== null ? `${adjusted}%` : '请输入人数'}
+                </li>
+              );
+            })}
           </ul>
         </section>
 
@@ -536,7 +596,7 @@ const App = () => {
             </div>
           ) : (
             <div className="empty-state">
-              <p>请先选择两张手牌，并确保公共牌无重复。系统将自动计算胜率。</p>
+              <p>请先输入牌桌人数、选择两张手牌，并确保公共牌无重复。系统将自动计算胜率。</p>
             </div>
           )}
 
