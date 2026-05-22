@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import useDebounce from './hooks/useDebounce';
 
 type Card = { rank: number; suit: string; code: string };
 
@@ -375,10 +376,64 @@ const App = () => {
   const validPlayerCount = Number.isInteger(playerCount) && playerCount >= 2 && playerCount <= 9;
   const inputValid = heroValid && boardValid && !hasDuplicates && validPlayerCount;
 
-  const result = useMemo(() => {
-    if (!inputValid) return null;
-    return calculateResult(heroCards as Card[], boardCards.filter(Boolean) as Card[], playerCount);
-  }, [heroInput, boardInput, playerCount]);
+  const [result, setResult] = useState<Result | null>(null);
+  const [loading, setLoading] = useState(false);
+  const workerRef = useRef<Worker | null>(null);
+
+  const debouncedHero = useDebounce(heroInput, 250);
+  const debouncedBoard = useDebounce(boardInput, 300);
+  const debouncedPlayerCount = useDebounce(playerCount, 250);
+
+  useEffect(() => {
+    // create worker once
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore
+    workerRef.current = new Worker(new URL('./worker/simWorker.ts', import.meta.url));
+    const w = workerRef.current;
+    w.onmessage = (ev: MessageEvent) => {
+      const data = ev.data;
+      if (data && data.ok) {
+        setResult(data.result);
+      }
+      setLoading(false);
+    };
+    w.onerror = () => {
+      setLoading(false);
+    };
+    return () => {
+      w.terminate();
+      workerRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const heroCardsToSend = debouncedHero.map((c) => buildCard(c.rank, c.suit)).filter(Boolean) as Card[];
+    const boardCardsToSend = debouncedBoard.map((c) => buildCard(c.rank, c.suit)).filter(Boolean) as Card[];
+    const valid = heroCardsToSend.length === 2 && Number.isInteger(debouncedPlayerCount) && debouncedPlayerCount >= 2 && debouncedPlayerCount <= 9;
+    if (!valid) {
+      setResult(null);
+      setLoading(false);
+      return;
+    }
+
+    if (workerRef.current) {
+      setLoading(true);
+      workerRef.current.postMessage({ hero: heroCardsToSend, board: boardCardsToSend, playerCount: debouncedPlayerCount, sampleRate: 2000 });
+    } else {
+      // fallback to synchronous (rare)
+      setLoading(true);
+      setTimeout(() => {
+        try {
+          const res = calculateResult(heroCardsToSend, boardCardsToSend, debouncedPlayerCount);
+          setResult(res);
+        } catch (e) {
+          setResult(null);
+        } finally {
+          setLoading(false);
+        }
+      }, 0);
+    }
+  }, [debouncedHero, debouncedBoard, debouncedPlayerCount]);
 
   const strategy = result
     ? result.winRate >= 65
@@ -480,7 +535,7 @@ const App = () => {
                             checked={card.suit === suit}
                             onChange={(event) => updateHero(index, 'suit', event.target.value)}
                           />
-                          {suitLabels[suit]}
+                              <span className="suit-emoji">{suitLabels[suit]}</span>
                         </label>
                       ))}
                     </div>
@@ -516,7 +571,7 @@ const App = () => {
                                 checked={card.suit === suit}
                                 onChange={(event) => updateBoard(index, 'suit', event.target.value)}
                               />
-                              {suitLabels[suit]}
+                              <span className="suit-emoji">{suitLabels[suit]}</span>
                             </label>
                           ))}
                         </div>
@@ -549,7 +604,7 @@ const App = () => {
                                 checked={card.suit === suit}
                                 onChange={(event) => updateBoard(index + 3, 'suit', event.target.value)}
                               />
-                              {suitLabels[suit]}
+                              <span className="suit-emoji">{suitLabels[suit]}</span>
                             </label>
                           ))}
                         </div>
@@ -579,7 +634,17 @@ const App = () => {
 
         <section className="result-panel">
           <h2>计算结果</h2>
-          {inputValid && result ? (
+          {!inputValid && (
+            <div className="empty-state">
+              <p>请先输入牌桌人数、选择两张手牌，并确保公共牌无重复。系统将自动计算胜率。</p>
+            </div>
+          )}
+
+          {inputValid && loading && (
+            <div className="empty-state"><p>计算中，请稍候…</p></div>
+          )}
+
+          {inputValid && !loading && result && (
             <div className="result-grid">
               <div className="metric">
                 <span className="label">胜率</span>
@@ -594,7 +659,9 @@ const App = () => {
                 <strong>{result.lossRate}%</strong>
               </div>
             </div>
-          ) : (
+          )}
+
+          {inputValid && !loading && !result && (
             <div className="empty-state">
               <p>请先输入牌桌人数、选择两张手牌，并确保公共牌无重复。系统将自动计算胜率。</p>
             </div>
