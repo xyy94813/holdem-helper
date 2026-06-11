@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import useDebounce from './hooks/useDebounce';
 
 type Card = { rank: number; suit: string; code: string };
@@ -18,13 +18,11 @@ type Result = {
 type CardInput = { rank: string; suit: string };
 
 const ranks = ['2', '3', '4', '5', '6', '7', '8', '9', 'T', 'J', 'Q', 'K', 'A'];
-const rankOptions = ['', ...ranks];
 const suits = ['h', 'd', 'c', 's'];
 const suitLabels: Record<string, string> = { h: '♥️', d: '♦️', c: '♣️', s: '♠️' };
 const rankValue: Record<string, number> = { '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, T: 10, J: 11, Q: 12, K: 13, A: 14 };
 const handCategoryNames = ['高牌', '一对', '两对', '三条', '顺子', '同花', '葫芦', '四条', '同花顺'];
 
-const cardLabels = ['手牌 1', '手牌 2', 'Flop 1', 'Flop 2', 'Flop 3', 'Turn', 'River'];
 const openHighWinRateHands = [
   { hand: 'AA', rate: 85.2 },
   { hand: 'KK', rate: 82.1 },
@@ -358,36 +356,25 @@ const calculateResult = (hero: Card[], board: Card[], playerCount: number): Resu
 };
 
 const App = () => {
-  const [heroInput, setHeroInput] = useState<CardInput[]>([
-    { rank: 'A', suit: 'h' },
-    { rank: 'K', suit: 'd' },
-  ]);
-  const [boardInput, setBoardInput] = useState<CardInput[]>([
-    { rank: '', suit: 'h' },  // Flop1 红桃
-    { rank: '', suit: 's' },  // Flop2 黑桃
-    { rank: '', suit: 'c' },  // Flop3 梅花
-    { rank: '', suit: 's' },  // Turn 黑桃
-    { rank: '', suit: 's' },  // River 黑桃
-  ]);
+  const [selectedCards, setSelectedCards] = useState<CardInput[]>([]);
   const [playerCount, setPlayerCount] = useState(4);
 
-  const heroCards = heroInput.map((card) => buildCard(card.rank, card.suit));
-  const boardCards = boardInput.map((card) => buildCard(card.rank, card.suit));
-  const heroValid = heroCards.every((card) => card !== null);
-  const boardValid = boardInput.every((card) => (!card.rank && !card.suit) || (card.rank && card.suit));
-  const hasPartialBoard = boardInput.some((card) => (card.rank && !card.suit) || (!card.rank && card.suit));
-  const usedCards = [...heroCards.filter(Boolean) as Card[], ...boardCards.filter(Boolean) as Card[]];
+  const heroCardsIn = selectedCards.slice(0, 2);
+  const boardCardsIn = selectedCards.slice(2);
+  const heroCards = heroCardsIn.map(c => buildCard(c.rank, c.suit)).filter(Boolean) as Card[];
+  const boardCards = boardCardsIn.map(c => buildCard(c.rank, c.suit)).filter(Boolean) as Card[];
+  const heroValid = heroCards.length === 2;
+  const hasPartialBoard = selectedCards.length > 2 && selectedCards.slice(2).some(c => !c.rank);
+  const usedCards = [...heroCards, ...boardCards];
   const hasDuplicates = usedCards.length !== new Set(usedCards.map((card) => card.code)).size;
   const validPlayerCount = Number.isInteger(playerCount) && playerCount >= 2 && playerCount <= 9;
-  // Allow partial/empty board entries: filter invalid board cards at compute-time instead of blocking input
   const inputValid = heroValid && !hasDuplicates && validPlayerCount;
 
   const [result, setResult] = useState<Result | null>(null);
   const [loading, setLoading] = useState(false);
   const workerRef = useRef<Worker | null>(null);
 
-  const debouncedHero = useDebounce(heroInput, 250);
-  const debouncedBoard = useDebounce(boardInput, 300);
+  const debouncedSelected = useDebounce(selectedCards, 250);
   const debouncedPlayerCount = useDebounce(playerCount, 250);
 
   useEffect(() => {
@@ -413,8 +400,8 @@ const App = () => {
   }, []);
 
   useEffect(() => {
-    const heroCardsToSend = debouncedHero.map((c) => buildCard(c.rank, c.suit)).filter(Boolean) as Card[];
-    const boardCardsToSend = debouncedBoard.map((c) => buildCard(c.rank, c.suit)).filter(Boolean) as Card[];
+    const heroCardsToSend = debouncedSelected.slice(0, 2).map((c) => buildCard(c.rank, c.suit)).filter(Boolean) as Card[];
+    const boardCardsToSend = debouncedSelected.slice(2).map((c) => buildCard(c.rank, c.suit)).filter(Boolean) as Card[];
     const valid = heroCardsToSend.length === 2 && Number.isInteger(debouncedPlayerCount) && debouncedPlayerCount >= 2 && debouncedPlayerCount <= 9;
     if (!valid) {
       setResult(null);
@@ -439,7 +426,7 @@ const App = () => {
         }
       }, 0);
     }
-  }, [debouncedHero, debouncedBoard, debouncedPlayerCount]);
+  }, [debouncedSelected, debouncedPlayerCount]);
 
   const strategy = result
     ? result.winRate >= 65
@@ -449,59 +436,28 @@ const App = () => {
       : '建议收手：当前胜率偏低，谨慎弃牌或最小化投入。'
     : '';
 
-  const updateHero = (index: number, field: keyof CardInput, value: string) => {
-    const next = [...heroInput];
-    if (field === 'rank') {
-      let v = value.trim().toUpperCase();
-      if (v === '10') v = 'T';
-      if (!rankValue[v]) v = '';
-      next[index] = { ...next[index], rank: v };
-    } else if (field === 'suit') {
-      const s = value.trim().toLowerCase();
-      next[index] = { ...next[index], suit: suits.includes(s) ? s : '' };
-    } else {
-      next[index] = { ...next[index], [field]: value };
-    }
-    setHeroInput(next);
+  const addCard = (rank: string, suit: string) => {
+    if (selectedCards.length >= 7) return;
+    const already = selectedCards.some(c => c.rank === rank && c.suit === suit);
+    if (already) return;
+    setSelectedCards([...selectedCards, { rank, suit }]);
   };
 
-  const updateBoard = (index: number, field: keyof CardInput, value: string) => {
-    const next = [...boardInput];
-    if (field === 'rank') {
-      let v = value.trim().toUpperCase();
-      if (v === '10') v = 'T';
-      if (!rankValue[v]) v = '';
-      next[index] = { ...next[index], rank: v };
-    } else if (field === 'suit') {
-      const s = value.trim().toLowerCase();
-      next[index] = { ...next[index], suit: suits.includes(s) ? s : '' };
-    } else {
-      next[index] = { ...next[index], [field]: value };
-    }
-    setBoardInput(next);
+  const removeCard = (idx: number) => {
+    setSelectedCards(selectedCards.filter((_, i) => i !== idx));
   };
 
   const resetAll = () => {
-    setHeroInput([
-      { rank: 'A', suit: 'h' },
-      { rank: 'K', suit: 'd' },
-    ]);
-    setBoardInput([
-      { rank: '', suit: 'h' },  // Flop1 红桃
-      { rank: '', suit: 's' },  // Flop2 黑桃
-      { rank: '', suit: 'c' },  // Flop3 梅花
-      { rank: '', suit: 's' },  // Turn 黑桃
-      { rank: '', suit: 's' },  // River 黑桃
-    ]);
-    // setPlayerCount(4);
+    setSelectedCards([]);
+    setPlayerCount(4);
   };
 
   const invalidMessage = playerCount < 2
     ? '请先输入 2-9 人的牌桌人数。'
     : hasDuplicates
     ? '检测到重复牌，请检查输入。'
-    : !heroValid
-    ? '请先选择两张手牌。'
+    : selectedCards.length < 2
+    ? '请先至少选择两张手牌。'
     : '';
 
   const combinedHands = (() => {
@@ -550,138 +506,64 @@ const App = () => {
         </section>
 
         <section className="card-inputs">
-          <div className="input-group">
-            <div className="card-grid">
-              {heroInput.map((card, index) => (
-                <label key={index}>
-                  {cardLabels[index]}
-                  <div className="card-selects">
-                    <div className="suit-options">
-                      {suits.map((suit) => (
-                        <label key={suit} className="suit-option">
-                          <input
-                            type="radio"
-                            name={`hero-suit-${index}`}
-                            value={suit}
-                            checked={card.suit === suit}
-                            onChange={(event) => updateHero(index, 'suit', event.target.value)}
-                          />
-                              <span className="suit-emoji">{suitLabels[suit]}</span>
-                        </label>
-                      ))}
+          {/* 手牌 - selected hero cards (first 2) */}
+          <div className="hero-section">
+            <h3>手牌</h3>
+            <div className="selected-cards">
+              {selectedCards.slice(0, 2).length > 0
+                ? selectedCards.slice(0, 2).map((card, i) => (
+                    <div key={i} className="selected-card-item">
+                      <span className="selected-card-text">{suitLabels[card.suit]}{card.rank}</span>
+                      <button className="remove-btn" onClick={() => removeCard(i)}>×</button>
                     </div>
-                    <div className="rank-buttons">
-                      {ranks.map((rank) => (
-                        <button
-                          key={rank}
-                          type="button"
-                          className={`rank-btn ${card.rank === rank ? 'active' : ''}`}
-                          onClick={() => updateHero(index, 'rank', rank)}
-                        >
-                          {rank}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </label>
-              ))}
+                  ))
+                : <div className="selected-card-item empty">空</div>
+              }
             </div>
           </div>
 
-          <div className="input-group">
-            <div className="board-group">
-              <div>
-                <div className="card-grid">
-                  {boardInput.slice(0, 3).map((card, index) => (
-                    <label key={index}>
-                      {cardLabels[index + 2]}
-                      <div className="card-selects">
-                        <div className="suit-options">
-                          {suits.map((suit) => (
-                            <label key={suit} className="suit-option">
-                              <input
-                                type="radio"
-                                name={`board-suit-${index}`}
-                                value={suit}
-                                checked={card.suit === suit}
-                                onChange={(event) => updateBoard(index, 'suit', event.target.value)}
-                              />
-                              <span className="suit-emoji">{suitLabels[suit]}</span>
-                            </label>
-                          ))}
-                        </div>
-                        <div className="rank-buttons">
-                          <button
-                            key="clear"
-                            type="button"
-                            className={`rank-btn ${card.rank === '' ? 'active' : ''}`}
-                            onClick={() => updateBoard(index, 'rank', '')}
-                          >
-                            清
-                          </button>
-                          {ranks.map((rank) => (
-                            <button
-                              key={rank}
-                              type="button"
-                              className={`rank-btn ${card.rank === rank ? 'active' : ''}`}
-                              onClick={() => updateBoard(index, 'rank', rank)}
-                            >
-                              {rank}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    </label>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <div className="card-grid">
-                  {boardInput.slice(3).map((card, index) => (
-                    <label key={index + 3}>
-                      {cardLabels[index + 5]}
-                      <div className="card-selects">
-                        <div className="suit-options">
-                          {suits.map((suit) => (
-                            <label key={suit} className="suit-option">
-                              <input
-                                type="radio"
-                                name={`board-suit-${index + 3}`}
-                                value={suit}
-                                checked={card.suit === suit}
-                                onChange={(event) => updateBoard(index + 3, 'suit', event.target.value)}
-                              />
-                              <span className="suit-emoji">{suitLabels[suit]}</span>
-                            </label>
-                          ))}
-                        </div>
-                        <div className="rank-buttons">
-                          <button
-                            key="clear"
-                            type="button"
-                            className={`rank-btn ${card.rank === '' ? 'active' : ''}`}
-                            onClick={() => updateBoard(index + 3, 'rank', '')}
-                          >
-                            清
-                          </button>
-                          {ranks.map((rank) => (
-                            <button
-                              key={rank}
-                              type="button"
-                              className={`rank-btn ${card.rank === rank ? 'active' : ''}`}
-                              onClick={() => updateBoard(index + 3, 'rank', rank)}
-                            >
-                              {rank}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    </label>
-                  ))}
-                </div>
-              </div>
+          {/* 公共牌 - selected board cards (index 2+) */}
+          <div className="board-section">
+            <h3>公共牌</h3>
+            <div className="selected-cards">
+              {selectedCards.slice(2).length > 0
+                ? selectedCards.slice(2).map((card, i) => (
+                    <div key={i} className="selected-card-item">
+                      <span className="selected-card-text">{suitLabels[card.suit]}{card.rank}</span>
+                      <button className="remove-btn" onClick={() => removeCard(i + 2)}>×</button>
+                    </div>
+                  ))
+                : <div className="selected-card-item empty">空</div>
+              }
             </div>
+          </div>
+
+          {/* 所有牌 - clickable grid of all 52 cards, one row per suit */}
+          <div className="all-cards-section">
+            <h3>所有牌</h3>
+            {suits.map((suit) => (
+              <div key={suit} className="suit-row">
+                <span className="suit-row-label">{suitLabels[suit]}</span>
+                <div className="all-cards-grid">
+                  {ranks.map((rank) => {
+                    const selected = selectedCards.some(
+                      (c) => c.rank === rank && c.suit === suit
+                    );
+                    return (
+                      <button
+                        key={`${rank}${suit}`}
+                        type="button"
+                        className={`all-card-btn${selected ? ' selected' : ''}`}
+                        onClick={() => addCard(rank, suit)}
+                        disabled={selected}
+                      >
+                        {rank}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
 
           <div className="actions">
@@ -689,7 +571,7 @@ const App = () => {
           </div>
 
           <div className="hints">
-            <p>先选择花色，再输入牌号。10 可直接输入“10”，其余牌号为 A/K/Q/J/T/2-9。</p>
+            <p>点击「所有牌」中的牌，依次填入「手牌」与「公共牌」。已选中的牌不可重复点击。</p>
             {invalidMessage && <p className="error">{invalidMessage}</p>}
             {hasPartialBoard && !invalidMessage && (
               <p>注意：部分公共牌未填写，计算时会自动忽略无效条目。</p>
