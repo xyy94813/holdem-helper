@@ -68,6 +68,7 @@ const getHandCategory = (cards: Card[]): number => {
   if (isStraightFlush) return 8;
   if (counts[0].count === 4) return 7;
   if (counts[0].count === 3 && counts[1]?.count === 2) return 6;
+  if (counts[0].count === 3 && counts[1]?.count === 3) return 6;
   if (isFlush) return 5;
   if (isStraight) return 4;
   if (counts[0].count === 3) return 3;
@@ -125,7 +126,7 @@ const getHandValue = (cards: Card[]) => {
     return 0;
   })();
 
-  const topRanks = counts.map((item) => item.rank);
+  const topRanks = counts.slice(0, 2).map((item) => item.rank);
   const kickerRanks = sorted
     .filter((card) => !counts.slice(0, 2).some((item) => item.rank === card.rank))
     .map((card) => card.rank)
@@ -144,7 +145,9 @@ const getHandValue = (cards: Card[]) => {
   })();
 
   const scoreParts = [category, ...topRanks, ...kickerRanks];
-  return scoreParts.reduce((acc, value) => acc * 100 + value, 0);
+  const padded = scoreParts.slice(0, 6);
+  while (padded.length < 6) padded.push(0);
+  return padded.reduce((acc, value) => acc * 100 + value, 0);
 };
 
 const scoreBestHand = (cards: Card[]) => {
